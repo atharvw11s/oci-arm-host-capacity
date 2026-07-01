@@ -41,16 +41,19 @@ jobs:
           sed -i "s|OCI_MEMORY_IN_GBS=.*|OCI_MEMORY_IN_GBS=12|g" .env
           sed -i "s|OCI_SHAPE=.*|OCI_SHAPE=VM.Standard.A1.Flex|g" .env
           sed -i "s|OCI_PRIVATE_KEY_FILENAME=.*|OCI_PRIVATE_KEY_FILENAME=oracle_api_key.pem|g" .env
+
       - name: Inject API Private Key File
         run: |
           printf -- "-----BEGIN RSA PRIVATE KEY-----\n" > oracle_api_key.pem
           printf -- "%s\n" "${{ secrets.OCI_PRIVATE_KEY }}" >> oracle_api_key.pem
           printf -- "-----END RSA PRIVATE KEY-----\n" >> oracle_api_key.pem
           chmod 600 oracle_api_key.pem
+
       - name: Install OCI CLI for Pre-Check Validation
         run: |
           bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults 2>/dev/null || true
           echo "/home/runner/bin" >> $GITHUB_PATH
+
       - name: Run Safe Active Instance Check
         id: check_instance
         run: |
@@ -76,12 +79,12 @@ jobs:
           else
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
+
       - name: Execute Hitrov OCI Core Script
         id: oci_script
-        continue-on-error: true # Captures failures cleanly without breaking runner evaluation steps
+        continue-on-error: true  # Ensures capacity errors do not halt the loop execution
         if: steps.check_instance.outputs.exists != 'true'
         run: |
-          # Capture output to detect core API failures vs basic capacity shortages
           php index.php 2>&1 | tee script_output.log
           
           if grep -q "TooManyRequests" script_output.log; then
@@ -91,6 +94,7 @@ jobs:
           else
             echo "status=unknown" >> $GITHUB_OUTPUT
           fi
+
       - name: Send Success Notification to Discord
         if: always() && steps.check_instance.outputs.exists == 'true'
         run: |
@@ -98,6 +102,7 @@ jobs:
             -X POST \
             -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
             "${{ secrets.DISCORD_WEBHOOK }}"
+
       - name: Loop - Smart Chain Trigger
         if: always() && steps.check_instance.outputs.exists != 'true'
         run: |
