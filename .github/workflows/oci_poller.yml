@@ -92,14 +92,13 @@ jobs:
             -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
             "${{ secrets.DISCORD_WEBHOOK }}"
 
-            - name: Loop - Trigger next run immediately
+      - name: Loop - Trigger next run immediately
         if: always() && steps.check_instance.outputs.exists != 'true'
         env:
           GH_REPO: ${{ github.repository }}
           GH_REF: ${{ github.ref_name }}
         run: |
           echo "Instance not created yet. Spawning the next runner immediately..."
-          
           curl -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
