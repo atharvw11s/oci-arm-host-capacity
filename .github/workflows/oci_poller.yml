@@ -1,11 +1,11 @@
 name: OCI 24-7 Capacity Poller
 
 on:
-  workflow_dispatch:     # Triggered externally via the API
+  workflow_dispatch:     # Triggered externally via cron-job.org
 
 permissions:
   contents: read
-  actions: write
+  actions: write         # Crucial: Allows the script to disable/enable itself
 
 jobs:
   run-capacity-script:
@@ -45,7 +45,6 @@ jobs:
       - name: Inject API Private Key File
         run: |
           echo "-----BEGIN RSA PRIVATE KEY-----" > oracle_api_key.pem
-          echo "-----BEGIN RSA PRIVATE KEY-----" > oracle_api_key.pem
           echo "${{ secrets.OCI_PRIVATE_KEY }}" >> oracle_api_key.pem
           echo "-----END RSA PRIVATE KEY-----" >> oracle_api_key.pem
           chmod 600 oracle_api_key.pem
@@ -62,6 +61,8 @@ jobs:
             echo "RESULT=retry" >> $GITHUB_OUTPUT
           elif echo "$OUTPUT" | grep -iq "Already have an instance"; then
             echo "RESULT=already_exists" >> $GITHUB_OUTPUT
+          elif echo "$OUTPUT" | grep -iq "TooManyRequests" || echo "$OUTPUT" | grep -iq "Too many requests" || echo "$OUTPUT" | grep -iq "429"; then
+            echo "RESULT=cooldown" >> $GITHUB_OUTPUT
           elif echo "$OUTPUT" | grep -iq "error" || echo "$OUTPUT" | grep -iq "Exception"; then
             echo "RESULT=api_error" >> $GITHUB_OUTPUT
           else
@@ -81,5 +82,35 @@ jobs:
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d '{"content": "ℹ️ **Poller Stopped:** An instance with this shape already exists in your account."}' \
+               -d '{"content": "ℹ️ **Poller Stopped:** An instance with this shape already exists in your account. Self-destructing..."}' \
                ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Send Cooldown Alert to Discord
+        if: steps.oci_script.outputs.RESULT == 'cooldown'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "⏳ **Oracle Cooldown Detected:** Hit rate limit. Pausing sniper loop for 15 minutes to clear throttling..."}' \
+               ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
+        if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Throttling detected. Temporarily disabling workflow to block incoming cron triggers..."
+          gh workflow disable oci_poller.yml
+          
+          echo "Sleeping for 15 minutes (900 seconds) to cool down API..."
+          sleep 900
+          
+          echo "Cooldown over. Re-enabling workflow for cron-job.org..."
+          gh workflow enable oci_poller.yml
+
+      - name: 🛑 Shut Down Sniper Permanently
+        if: always() && (steps.oci_script.outputs.RESULT == 'success' || steps.oci_script.outputs.RESULT == 'already_exists')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Instance detected or successfully created! Shutting down the automation loop permanently..."
+          gh workflow disable oci_poller.yml
