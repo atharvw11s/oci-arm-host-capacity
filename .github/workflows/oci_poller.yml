@@ -48,3 +48,4 @@ jobs:
 
       - name: Execute Hitrov OCI Core Script
         run: php index.php
+
