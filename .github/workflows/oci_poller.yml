@@ -1,0 +1,52 @@
+name: OCI 5-Min Capacity Poller
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Triggers precisely every 5 minutes
+  workflow_dispatch:       # Allows manual testing from the Actions tab
+
+jobs:
+  run-capacity-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP Environment
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json, openssl
+
+      - name: Install Composer Dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Configure .env File
+        run: |
+          # Copy the official repository template
+          cp .env.example .env
+          
+          # Replace configuration values line-by-line using sed
+          sed -i "s|OCI_REGION=.*|OCI_REGION=${{ secrets.OCI_REGION }}|g" .env
+          sed -i "s|OCI_USER_ID=.*|OCI_USER_ID=${{ secrets.OCI_USER_ID }}|g" .env
+          sed -i "s|OCI_TENANCY_ID=.*|OCI_TENANCY_ID=${{ secrets.OCI_TENANCY_ID }}|g" .env
+          sed -i "s|OCI_KEY_FINGERPRINT=.*|OCI_KEY_FINGERPRINT=${{ secrets.OCI_KEY_FINGERPRINT }}|g" .env
+          sed -i "s|OCI_SUBNET_ID=.*|OCI_SUBNET_ID=${{ secrets.OCI_SUBNET_ID }}|g" .env
+          sed -i "s|OCI_IMAGE_ID=.*|OCI_IMAGE_ID=${{ secrets.OCI_IMAGE_ID }}|g" .env
+          sed -i "s|OCI_AVAILABILITY_DOMAIN=.*|OCI_AVAILABILITY_DOMAIN=${{ secrets.OCI_AVAILABILITY_DOMAIN }}|g" .env
+          sed -i "s|OCI_SSH_PUBLIC_KEY=.*|OCI_SSH_PUBLIC_KEY=\"${{ secrets.OCI_SSH_PUBLIC_KEY }}\"|g" .env
+          
+          # Tell the script what filename to search for the private key
+          sed -i "s|OCI_PRIVATE_KEY_FILENAME=.*|OCI_PRIVATE_KEY_FILENAME=oracle_api_key.pem|g" .env
+
+      - name: Inject API Private Key File
+        run: |
+          # Re-construct the PEM file dynamically from secrets
+          echo "-----BEGIN RSA PRIVATE KEY-----" > oracle_api_key.pem
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" >> oracle_api_key.pem
+          echo "-----END RSA PRIVATE KEY-----" >> oracle_api_key.pem
+          chmod 600 oracle_api_key.pem
+
+      - name: Execute Hitrov OCI Core Script
+        run: php index.php
