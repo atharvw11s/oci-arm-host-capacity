@@ -75,7 +75,7 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned! 🚀"}' \
-               ${{ secrets.DISCORD_WEBHOOK }}
+               "${{ secrets.DISCORD_WEBHOOK }}"
 
       - name: Send Alert for Pre-existing Instance
         if: steps.oci_script.outputs.RESULT == 'already_exists'
@@ -83,7 +83,7 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{"content": "ℹ️ **Poller Stopped:** An instance with this shape already exists in your account. Self-destructing..."}' \
-               ${{ secrets.DISCORD_WEBHOOK }}
+               "${{ secrets.DISCORD_WEBHOOK }}"
 
       - name: Send Cooldown Alert to Discord
         if: steps.oci_script.outputs.RESULT == 'cooldown'
@@ -91,7 +91,7 @@ jobs:
           curl -H "Content-Type: application/json" \
                -X POST \
                -d '{"content": "⏳ **Oracle Cooldown Detected:** Hit rate limit. Pausing sniper loop for 15 minutes to clear throttling..."}' \
-               ${{ secrets.DISCORD_WEBHOOK }}
+               "${{ secrets.DISCORD_WEBHOOK }}"
 
       - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
         if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
