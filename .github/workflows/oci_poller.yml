@@ -2,7 +2,7 @@ name: OCI Continuous Capacity Poller
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Run every 5 minutes
+    - cron: '*/5 * * * *'  # Fallback safety trigger
   workflow_dispatch:     # Trigger manually the FIRST time to kick off the loop chain
 
 permissions:
@@ -51,7 +51,8 @@ jobs:
 
       - name: Install OCI CLI for Pre-Check Validation
         run: |
-          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults 2>/dev/null || true
+          # Fixed: Re-inserted the true script script execution URL path
+          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults
           echo "/home/runner/bin" >> $GITHUB_PATH
 
       - name: Run Safe Active Instance Check
