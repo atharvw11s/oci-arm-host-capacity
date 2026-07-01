@@ -1,1 +1,107 @@
 
+name: OCI Continuous Capacity Poller
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Safety net to restart the loop once a day if it ever stalls
+  workflow_dispatch:     # Trigger manually the FIRST time to kick off the loop chain
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  run-capacity-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP Environment
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, json, openssl
+
+      - name: Install Composer Dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Configure .env File
+        run: |
+          cp .env.example .env
+          sed -i "s|OCI_REGION=.*|OCI_REGION=${{ secrets.OCI_REGION }}|g" .env
+          sed -i "s|OCI_USER_ID=.*|OCI_USER_ID=${{ secrets.OCI_USER_ID }}|g" .env
+          sed -i "s|OCI_TENANCY_ID=.*|OCI_TENANCY_ID=${{ secrets.OCI_TENANCY_ID }}|g" .env
+          sed -i "s|OCI_KEY_FINGERPRINT=.*|OCI_KEY_FINGERPRINT=${{ secrets.OCI_KEY_FINGERPRINT }}|g" .env
+          sed -i "s|OCI_SUBNET_ID=.*|OCI_SUBNET_ID=${{ secrets.OCI_SUBNET_ID }}|g" .env
+          sed -i "s|OCI_IMAGE_ID=.*|OCI_IMAGE_ID=${{ secrets.OCI_IMAGE_ID }}|g" .env
+          sed -i "s|OCI_AVAILABILITY_DOMAIN=.*|OCI_AVAILABILITY_DOMAIN=${{ secrets.OCI_AVAILABILITY_DOMAIN }}|g" .env
+          sed -i "s|OCI_SSH_PUBLIC_KEY=.*|OCI_SSH_PUBLIC_KEY=\"${{ secrets.OCI_SSH_PUBLIC_KEY }}\"|g" .env
+          sed -i "s|OCI_OCPUS=.*|OCI_OCPUS=2|g" .env
+          sed -i "s|OCI_MEMORY_IN_GBS=.*|OCI_MEMORY_IN_GBS=12|g" .env
+          sed -i "s|OCI_SHAPE=.*|OCI_SHAPE=VM.Standard.A1.Flex|g" .env
+          sed -i "s|OCI_PRIVATE_KEY_FILENAME=.*|OCI_PRIVATE_KEY_FILENAME=oracle_api_key.pem|g" .env
+
+      - name: Inject API Private Key File
+        run: |
+          printf -- "-----BEGIN RSA PRIVATE KEY-----\n" > oracle_api_key.pem
+          printf -- "%s\n" "${{ secrets.OCI_PRIVATE_KEY }}" >> oracle_api_key.pem
+          printf -- "-----END RSA PRIVATE KEY-----\n" >> oracle_api_key.pem
+          chmod 600 oracle_api_key.pem
+
+      - name: Install OCI CLI for Pre-Check Validation
+        run: |
+          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults 2>/dev/null || true
+          echo "/home/runner/bin" >> $GITHUB_PATH
+
+      - name: Run Safe Active Instance Check
+        id: check_instance
+        run: |
+          mkdir -p ~/.oci
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=${{ secrets.OCI_USER_ID }}" >> ~/.oci/config
+          echo "fingerprint=${{ secrets.OCI_KEY_FINGERPRINT }}" >> ~/.oci/config
+          echo "tenancy=${{ secrets.OCI_TENANCY_ID }}" >> ~/.oci/config
+          echo "region=${{ secrets.OCI_REGION }}" >> ~/.oci/config
+          echo "key_file=~/oracle_api_key_cli.pem" >> ~/.oci/config
+          
+          printf -- "-----BEGIN RSA PRIVATE KEY-----\n" > ~/oracle_api_key_cli.pem
+          printf -- "%s\n" "${{ secrets.OCI_PRIVATE_KEY }}" >> ~/oracle_api_key_cli.pem
+          printf -- "-----END RSA PRIVATE KEY-----\n" >> ~/oracle_api_key_cli.pem
+          chmod 600 ~/oracle_api_key_cli.pem
+          
+          export PATH="/home/runner/bin:$PATH"
+          INSTANCES=$(oci compute instance list --compartment-id "${{ secrets.OCI_TENANCY_ID }}" --lifecycle-state RUNNING --shape VM.Standard.A1.Flex 2>/dev/null || echo "[]")
+          COUNT=$(echo "$INSTANCES" | jq '.data | length' 2>/dev/null || echo "0")
+          
+          if [ "$COUNT" -gt 0 ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Execute Hitrov OCI Core Script
+        if: steps.check_instance.outputs.exists != 'true'
+        run: php index.php
+
+      - name: Send Success Notification to Discord
+        if: always() && steps.check_instance.outputs.exists == 'true'
+        run: |
+          curl -H "Content-Type: application/json" \
+            -X POST \
+            -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
+            "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: Loop - Trigger next run immediately
+        if: always() && steps.check_instance.outputs.exists != 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_REF: ${{ github.ref_name }}
+        run: |
+          echo "Instance not created yet. Spawning the next runner immediately..."
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://github.com{GH_REPO}/actions/workflows/oci_poller.yml/dispatches" \
+            -d "{\"ref\":\"${GH_REF}\"}"
