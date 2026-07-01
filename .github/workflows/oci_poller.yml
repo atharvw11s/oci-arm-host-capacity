@@ -1,9 +1,9 @@
-name: OCI 5-Min Capacity Poller
+name: OCI Continuous Capacity Poller
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Evaluates the internal queue state every 5 minutes
-  workflow_dispatch:       # Allows manual testing from the Actions tab
+    - cron: '0 0 * * *'  # Safety net to restart the loop once a day if it ever stalls
+  workflow_dispatch:     # Trigger manually the FIRST time to kick off the loop chain
 
 permissions:
   contents: read
@@ -17,45 +17,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Initialize Delay Tracking Cache
-        id: delay_cache
-        uses: actions/cache@v4
-        with:
-          path: .poller_timestamp
-          key: oci-poller-timestamp-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            oci-poller-timestamp-
-
-      - name: Evaluate Throttling Window
-        id: throttle_check
-        run: |
-          CURRENT_TIME=$(date +%s)
-          
-          if [ -f .poller_timestamp ]; then
-            TARGET_TIME=$(cat .poller_timestamp)
-            echo "Current Epoch: $CURRENT_TIME, Next Eligible Execution Epoch: $TARGET_TIME"
-            
-            if [ "$CURRENT_TIME" -lt "$TARGET_TIME" ]; then
-              echo "Throttling threshold active. Skipping execution block to save account resources."
-              echo "skip=true" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          fi
-          echo "skip=false" >> $GITHUB_OUTPUT
-
       - name: Setup PHP Environment
-        if: steps.throttle_check.outputs.skip != 'true'
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: curl, json, openssl
 
       - name: Install Composer Dependencies
-        if: steps.throttle_check.outputs.skip != 'true'
         run: composer install --no-interaction --prefer-dist
 
       - name: Configure .env File
-        if: steps.throttle_check.outputs.skip != 'true'
         run: |
           cp .env.example .env
           sed -i "s|OCI_REGION=.*|OCI_REGION=${{ secrets.OCI_REGION }}|g" .env
@@ -72,7 +43,6 @@ jobs:
           sed -i "s|OCI_PRIVATE_KEY_FILENAME=.*|OCI_PRIVATE_KEY_FILENAME=oracle_api_key.pem|g" .env
 
       - name: Inject API Private Key File
-        if: steps.throttle_check.outputs.skip != 'true'
         run: |
           printf -- "-----BEGIN RSA PRIVATE KEY-----\n" > oracle_api_key.pem
           printf -- "%s\n" "${{ secrets.OCI_PRIVATE_KEY }}" >> oracle_api_key.pem
@@ -80,13 +50,11 @@ jobs:
           chmod 600 oracle_api_key.pem
 
       - name: Install OCI CLI for Pre-Check Validation
-        if: steps.throttle_check.outputs.skip != 'true'
         run: |
           bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults 2>/dev/null || true
           echo "/home/runner/bin" >> $GITHUB_PATH
 
       - name: Run Safe Active Instance Check
-        if: steps.throttle_check.outputs.skip != 'true'
         id: check_instance
         run: |
           mkdir -p ~/.oci
@@ -113,7 +81,7 @@ jobs:
           fi
 
       - name: Execute Hitrov OCI Core Script
-        if: steps.throttle_check.outputs.skip != 'true' && steps.check_instance.outputs.exists != 'true'
+        if: steps.check_instance.outputs.exists != 'true'
         run: php index.php
 
       - name: Send Success Notification to Discord
@@ -121,11 +89,16 @@ jobs:
         run: |
           curl -H "Content-Type: application/json" \
             -X POST \
-            -d '{"content": "🎉 **OCI Instance Detected!** The polling queue has halted successfully. Your server is live!"}' \
+            -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
             "${{ secrets.DISCORD_WEBHOOK }}"
 
-      - name: Set Next Execution Lock Timestamp
-        if: always() && steps.throttle_check.outputs.skip != 'true' && steps.check_instance.outputs.exists != 'true'
+      - name: Loop - Trigger next run immediately
+        if: always() && steps.check_instance.outputs.exists != 'true'
         run: |
-          # Calculate an unbilled 5-minute freeze window (300 seconds) outside the active runner runtime
-          echo "$(($(date +%s) + 300))" > .poller_timestamp
+          echo "Instance not created yet. Spawning the next runner immediately..."
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://github.com{{ github.repository }}/actions/workflows/oci_poller.yml/dispatches \
+            -d '{"ref":"'"${{ github.ref_name }}"'"}'
