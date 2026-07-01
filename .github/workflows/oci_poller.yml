@@ -1,4 +1,3 @@
-
 name: OCI Continuous Capacity Poller
 
 on:
@@ -95,13 +94,10 @@ jobs:
 
       - name: Loop - Trigger next run immediately
         if: always() && steps.check_instance.outputs.exists != 'true'
-        env:
-          GH_REPO: ${{ github.repository }}
-          GH_REF: ${{ github.ref_name }}
         run: |
           echo "Instance not created yet. Spawning the next runner immediately..."
+          
           curl -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://github.com{GH_REPO}/actions/workflows/oci_poller.yml/dispatches" \
-            -d "{\"ref\":\"${GH_REF}\"}"
+            "
