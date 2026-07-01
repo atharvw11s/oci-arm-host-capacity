@@ -100,5 +100,5 @@ jobs:
           curl -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://github.com" \
+            "https://api.github.com/repos/atharvw11s/oci-arm-host-capacity/actions/workflows/oci_poller.yml/dispatches" \
             -d '{"ref":"main"}'
