@@ -49,18 +49,72 @@ jobs:
           printf -- "-----END RSA PRIVATE KEY-----\n" >> oracle_api_key.pem
           chmod 600 oracle_api_key.pem
 
+      - name: Install OCI CLI for Pre-Check Validation
+        run: |
+          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults
+          echo "/home/runner/bin" >> $GITHUB_PATH
+
+      - name: Run Safe Active Instance Check
+        id: check_instance
+        run: |
+          mkdir -p ~/.oci
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=${{ secrets.OCI_USER_ID }}" >> ~/.oci/config
+          echo "fingerprint=${{ secrets.OCI_KEY_FINGERPRINT }}" >> ~/.oci/config
+          echo "tenancy=${{ secrets.OCI_TENANCY_ID }}" >> ~/.oci/config
+          echo "region=${{ secrets.OCI_REGION }}" >> ~/.oci/config
+          echo "key_file=~/oracle_api_key_cli.pem" >> ~/.oci/config
+          
+          printf -- "-----BEGIN RSA PRIVATE KEY-----\n" > ~/oracle_api_key_cli.pem
+          printf -- "%s\n" "${{ secrets.OCI_PRIVATE_KEY }}" >> ~/oracle_api_key_cli.pem
+          printf -- "-----END RSA PRIVATE KEY-----\n" >> ~/oracle_api_key_cli.pem
+          chmod 600 ~/oracle_api_key_cli.pem
+          
+          export PATH="/home/runner/bin:$PATH"
+          echo "Checking if an active VM.Standard.A1.Flex already exists..."
+          
+          INSTANCES=$(oci compute instance list \
+            --compartment-id "${{ secrets.OCI_TENANCY_ID }}" \
+            --lifecycle-state RUNNING \
+            --shape VM.Standard.A1.Flex \
+            2>/dev/null || echo "[]")
+          
+          COUNT=$(echo "$INSTANCES" | jq '.data | length' 2>/dev/null || echo "0")
+          
+          if [ "$COUNT" -gt 0 ]; then
+            echo "Instance detected! Stopping deployment to prevent account suspension."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No existing instances found. Proceeding with creation attempt."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Execute Hitrov OCI Core Script
+        if: steps.check_instance.outputs.exists != 'true'
         run: php index.php
 
-      - name: Loop - Trigger next run after 5 minutes
-        if: always() # Ensures loop continuation regardless of script outcome
+      - name: Send Success Notification to Discord
+        if: always() && steps.check_instance.outputs.exists == 'true'
         run: |
-          echo "Waiting 4.5 minutes to account for runner startup overhead..."
-          sleep 270
+          curl -H "Content-Type: application/json" \
+            -X POST \
+            -d '{"content": "🎉 **OCI Instance Detected!** The self-triggering loop has broken successfully to protect your account limits. Enjoy your new server!"}' \
+            "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: Loop - Delayed Trigger Next Run
+        if: always() && steps.check_instance.outputs.exists != 'true'
+        run: |
+          echo "Instance not created yet. Scheduling next run to execute after a 5-minute window..."
           
-          echo "Dispatching next loop execution..."
-          curl -X POST \
+          # Use GitHub's standard API repository variable formatting
+          REPO_URL="https://github.com{{ github.repository }}/actions/workflows/oci_poller.yml/dispatches"
+          
+          # The Delayed Loop Trick: Executes a detached, background curl loop process. 
+          # The runner sends the command, then closes the machine instantly so you aren't billed for the wait time.
+          (sleep 270 && curl -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/oci_poller.yml/dispatches \
-            -d '{"ref":"'"${{ github.ref_name }}"'"}'
+            $REPO_URL \
+            -d '{"ref":"'"${{ github.ref_name }}"'"}') &
+          
+          echo "Background execution scheduled successfully. Shutting down active runner to save minutes."
