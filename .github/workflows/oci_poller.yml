@@ -92,14 +92,24 @@ jobs:
             -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
             "${{ secrets.DISCORD_WEBHOOK }}"
 
-            - name: Loop - Trigger next run immediately
+       - name: Install OCI CLI for Pre-Check Validation
+        run: |
+          # Install OCI CLI using the official installer script
+          bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults || true
+          echo "/home/runner/bin" >> $GITHUB_PATH
+
+      - name: Loop - Trigger next run immediately
         if: always() && steps.check_instance.outputs.exists != 'true'
+        env:
+          REPO: ${{ github.repository }}
+          # Extract branch name from GITHUB_REF (e.g. refs/heads/main -> main)
+          BRANCH: ${GITHUB_REF#refs/heads/}
         run: |
           echo "Instance not created yet. Spawning the next runner immediately..."
-          
-          curl -X POST \
+
+          curl -s -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://github.com" \
-            -d '{"ref":"main"}'
-
+            -H "Content-Type: application/json" \
+            -d "{\"ref\":\"${BRANCH}\"}" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/oci_poller.yml/dispatches"
