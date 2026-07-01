@@ -69,26 +69,18 @@ jobs:
             echo "RESULT=success" >> $GITHUB_OUTPUT
           fi
 
-      - name: Send Success Notification to Discord
-        if: steps.oci_script.outputs.RESULT == 'success'
-        run: |
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned! 🚀"}' \
-               "${{ secrets.DISCORD_WEBHOOK }}"
-
       - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
         if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Throttling detected. Temporarily disabling workflow silently..."
+          echo "Throttling detected. Temporarily disabling workflow to block incoming cron triggers..."
           gh workflow disable oci_poller.yml
           
           echo "Sleeping for 15 minutes (900 seconds) to cool down API..."
           sleep 900
           
-          echo "Cooldown over. Re-enabling workflow..."
+          echo "Cooldown over. Re-enabling workflow for cron-job.org..."
           gh workflow enable oci_poller.yml
 
       - name: 🛑 Shut Down Sniper Permanently
@@ -96,5 +88,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Instance detected or successfully created! Shutting down permanently..."
+          echo "Instance detected or successfully created! Shutting down the automation loop permanently..."
           gh workflow disable oci_poller.yml
