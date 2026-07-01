@@ -2,8 +2,8 @@ name: OCI Continuous Capacity Poller
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Fallback safety trigger
-  workflow_dispatch:     # Trigger manually the FIRST time to kick off the loop chain
+    - cron: '0 0 * * *'  # Daily safety net to restart if the loop ever drops
+  workflow_dispatch:     # Trigger manually the FIRST time to kick off the chain
 
 permissions:
   contents: read
@@ -29,10 +29,10 @@ jobs:
       - name: Configure .env File
         run: |
           cp .env.example .env
-          sed -i "s|OCI_REGION=.*|OCI_REGION=${{ secrets.OCI_REGION }}|g" .env
-          sed -i "s|OCI_USER_ID=.*|OCI_USER_ID=${{ secrets.OCI_USER_ID }}|g" .env
-          sed -i "s|OCI_TENANCY_ID=.*|OCI_TENANCY_ID=${{ secrets.OCI_TENANCY_ID }}|g" .env
-          sed -i "s|OCI_KEY_FINGERPRINT=.*|OCI_KEY_FINGERPRINT=${{ secrets.OCI_KEY_FINGERPRINT }}|g" .env
+          sed -i "s|^OCI_REGION=.*|OCI_REGION=${{ secrets.OCI_REGION }}|g" .env
+          sed -i "s|^OCI_USER_ID=.*|OCI_USER_ID=${{ secrets.OCI_USER_ID }}|g" .env
+          sed -i "s|^OCI_TENANCY_ID=.*|OCI_TENANCY_ID=${{ secrets.OCI_TENANCY_ID }}|g" .env
+          sed -i "s|^OCI_KEY_FINGERPRINT=.*|OCI_KEY_FINGERPRINT=${{ secrets.OCI_KEY_FINGERPRINT }}|g" .env
           sed -i "s|OCI_SUBNET_ID=.*|OCI_SUBNET_ID=${{ secrets.OCI_SUBNET_ID }}|g" .env
           sed -i "s|OCI_IMAGE_ID=.*|OCI_IMAGE_ID=${{ secrets.OCI_IMAGE_ID }}|g" .env
           sed -i "s|OCI_AVAILABILITY_DOMAIN=.*|OCI_AVAILABILITY_DOMAIN=${{ secrets.OCI_AVAILABILITY_DOMAIN }}|g" .env
@@ -51,8 +51,7 @@ jobs:
 
       - name: Install OCI CLI for Pre-Check Validation
         run: |
-          # Fixed: Re-inserted the true script script execution URL path
-          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults
+          bash -c "$(curl -L https://githubusercontent.com)" -- --accept-all-defaults 2>/dev/null || true
           echo "/home/runner/bin" >> $GITHUB_PATH
 
       - name: Run Safe Active Instance Check
@@ -82,8 +81,20 @@ jobs:
           fi
 
       - name: Execute Hitrov OCI Core Script
+        id: oci_script
+        continue-on-error: true # Captures failures cleanly without breaking runner evaluation steps
         if: steps.check_instance.outputs.exists != 'true'
-        run: php index.php
+        run: |
+          # Capture output to detect core API failures vs basic capacity shortages
+          php index.php 2>&1 | tee script_output.log
+          
+          if grep -q "TooManyRequests" script_output.log; then
+            echo "status=ratelimited" >> $GITHUB_OUTPUT
+          elif grep -q "Out of host capacity" script_output.log; then
+            echo "status=nocapacity" >> $GITHUB_OUTPUT
+          else
+            echo "status=unknown" >> $GITHUB_OUTPUT
+          fi
 
       - name: Send Success Notification to Discord
         if: always() && steps.check_instance.outputs.exists == 'true'
@@ -93,13 +104,20 @@ jobs:
             -d '{"content": "🎉 **OCI Instance Detected!** The continuous loop has broken successfully to protect your account. Your server is live!"}' \
             "${{ secrets.DISCORD_WEBHOOK }}"
 
-      - name: Loop - Trigger next run immediately
+      - name: Loop - Smart Chain Trigger
         if: always() && steps.check_instance.outputs.exists != 'true'
         run: |
-          echo "Instance not created yet. Spawning the next runner immediately..."
+          SCRIPT_STATUS="${{ steps.oci_script.outputs.status }}"
+          
+          if [ "$SCRIPT_STATUS" = "ratelimited" ]; then
+            echo "⚠️ Oracle rate-limiting detected! Sleeping for 15 minutes to allow API token recovery..."
+            sleep 900
+          else
+            echo "No account restrictions detected. Instantly chain-triggering next execution block..."
+          fi
           
           curl -X POST \
             -H "Authorization: token ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/atharvw11s/oci-arm-host-capacity/actions/workflows/oci_poller.yml/dispatches" \
+            "https://github.com" \
             -d '{"ref":"main"}'
