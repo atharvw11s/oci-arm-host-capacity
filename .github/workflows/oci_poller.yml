@@ -59,15 +59,40 @@ jobs:
           
           if echo "$OUTPUT" | grep -iq "Out of host capacity"; then
             echo "RESULT=retry" >> $GITHUB_OUTPUT
-          elif echo "$OUTPUT" | grep -iq "Already have an instance"; then
+          elif echo "$OUTPUT" | grep -iq "LimitExceeded" || echo "$OUTPUT" | grep -iq "quota"; then
             echo "RESULT=already_exists" >> $GITHUB_OUTPUT
           elif echo "$OUTPUT" | grep -iq "TooManyRequests" || echo "$OUTPUT" | grep -iq "Too many requests" || echo "$OUTPUT" | grep -iq "429"; then
             echo "RESULT=cooldown" >> $GITHUB_OUTPUT
-          elif echo "$OUTPUT" | grep -iq "error" || echo "$OUTPUT" | grep -iq "Exception"; then
-            echo "RESULT=api_error" >> $GITHUB_OUTPUT
-          else
+          elif echo "$OUTPUT" | grep -iq "PROVISIONING"; then
             echo "RESULT=success" >> $GITHUB_OUTPUT
+          else
+            # Safeguard: Treat unknown errors or network blips as silent retries
+            echo "RESULT=retry" >> $GITHUB_OUTPUT
           fi
+
+      - name: Send Success Notification to Discord
+        if: steps.oci_script.outputs.RESULT == 'success'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned! 🚀"}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: Send Alert for Pre-existing Instance
+        if: steps.oci_script.outputs.RESULT == 'already_exists'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "ℹ️ **Poller Stopped:** Max core limit or pre-existing instance detected. Shutting down loop permanently..."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: Send Cooldown Alert to Discord
+        if: steps.oci_script.outputs.RESULT == 'cooldown'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "⏳ **Oracle Cooldown Detected:** Hit rate limit. Pausing sniper loop for 15 minutes to clear throttling..."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
 
       - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
         if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
