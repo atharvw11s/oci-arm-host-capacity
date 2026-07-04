@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  actions: write         # Crucial: Allows the script to disable/enable itself
+  actions: write         # Allows the script to disable/enable itself automatically
 
 jobs:
   run-capacity-script:
@@ -66,36 +66,63 @@ jobs:
           elif echo "$OUTPUT" | grep -iq "PROVISIONING"; then
             echo "RESULT=success" >> $GITHUB_OUTPUT
           else
-            # Handles holds or custom account errors silently without false alarms
-            echo "RESULT=retry" >> $GITHUB_OUTPUT
+            # Catches holds, authentication issues, or custom errors
+            echo "RESULT=unknown_error" >> $GITHUB_OUTPUT
           fi
 
-      - name: Send Success Notification to Discord
+      - name: 📢 Discord: Success Alert
         if: steps.oci_script.outputs.RESULT == 'success'
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned! 🚀"}' \
+               -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned in Mumbai! 🚀"}' \
                "${{ secrets.DISCORD_WEBHOOK }}"
 
-      - name: ⏳ Handle Oracle Cooldown Silently (15-Min Timeout)
+      - name: 📢 Discord: Capacity Status
+        if: steps.oci_script.outputs.RESULT == 'retry'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "😴 **Out of Capacity:** Mumbai data center is still full. Standing by for next cron loop..."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: 📢 Discord: Limit/Quota Alert
+        if: steps.oci_script.outputs.RESULT == 'already_exists'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "⚠️ **Limit Exceeded:** Oracle rejected the build because your account core quota is full or an instance already exists. Turning off sniper..."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: 📢 Discord: Cooldown Alert
+        if: steps.oci_script.outputs.RESULT == 'cooldown'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "⏳ **Oracle API Throttling:** Hit rate limits. Sleeping loop for 15 minutes to clear cooldown..."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: 📢 Discord: Unknown/Account Hold Alert
+        if: steps.oci_script.outputs.RESULT == 'unknown_error'
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d '{"content": "🛑 **API Warning/Hold:** Oracle sent back an unhandled error or account restriction log. Check GitHub Action outputs for raw data."}' \
+               "${{ secrets.DISCORD_WEBHOOK }}"
+
+      - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
         if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Throttling detected. Temporarily disabling workflow to protect account..."
           gh workflow disable oci_poller.yml
-          
-          echo "Sleeping for 15 minutes (900 seconds) to cool down API..."
           sleep 900
-          
-          echo "Cooldown over. Re-enabling workflow..."
           gh workflow enable oci_poller.yml
 
-      - name: 🛑 Shut Down Sniper Permanently (Silent)
+      - name: 🛑 Shut Down Sniper Permanently
         if: always() && (steps.oci_script.outputs.RESULT == 'success' || steps.oci_script.outputs.RESULT == 'already_exists')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Instance detected or successfully created! Turning off automation loop permanently..."
+          echo "Process finished. Disabling workflow permanently to clean up execution loops..."
           gh workflow disable oci_poller.yml
