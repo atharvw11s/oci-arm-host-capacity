@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  actions: write         # Allows the script to disable/enable itself automatically
+  actions: write         # Allows the script to self-manage its state
 
 jobs:
   run-capacity-script:
@@ -66,7 +66,6 @@ jobs:
           elif echo "$OUTPUT" | grep -iq "PROVISIONING"; then
             echo "RESULT=success" >> $GITHUB_OUTPUT
           else
-            # Catches holds, authentication issues, or custom errors
             echo "RESULT=unknown_error" >> $GITHUB_OUTPUT
           fi
 
@@ -78,20 +77,12 @@ jobs:
                -d '{"content": "🎉 **SUCCESS! Oracle VM Created!**\nYour Always Free Ampere Instance (**2 OCPUs, 12GB RAM**) has been successfully provisioned in Mumbai! 🚀"}' \
                "${{ secrets.DISCORD_WEBHOOK }}"
 
-      - name: 📢 Discord: Capacity Status
-        if: steps.oci_script.outputs.RESULT == 'retry'
-        run: |
-          curl -H "Content-Type: application/json" \
-               -X POST \
-               -d '{"content": "😴 **Out of Capacity:** Mumbai data center is still full. Standing by for next cron loop..."}' \
-               "${{ secrets.DISCORD_WEBHOOK }}"
-
       - name: 📢 Discord: Limit/Quota Alert
         if: steps.oci_script.outputs.RESULT == 'already_exists'
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d '{"content": "⚠️ **Limit Exceeded:** Oracle rejected the build because your account core quota is full or an instance already exists. Turning off sniper..."}' \
+               -d '{"content": "⚠️ **Sniper Stopped:** Oracle rejected the request because your account core quota limit is full or a VM already exists."}' \
                "${{ secrets.DISCORD_WEBHOOK }}"
 
       - name: 📢 Discord: Cooldown Alert
@@ -99,16 +90,18 @@ jobs:
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d '{"content": "⏳ **Oracle API Throttling:** Hit rate limits. Sleeping loop for 15 minutes to clear cooldown..."}' \
+               -d '{"content": "⏳ **API Cooldown:** Oracle is throttling requests. Pausing the workflow loop for 15 minutes to stay safe..."}' \
                "${{ secrets.DISCORD_WEBHOOK }}"
 
-      - name: 📢 Discord: Unknown/Account Hold Alert
+      - name: 📢 Discord: Unknown Error / Account Hold Alert
         if: steps.oci_script.outputs.RESULT == 'unknown_error'
         run: |
           curl -H "Content-Type: application/json" \
                -X POST \
-               -d '{"content": "🛑 **API Warning/Hold:** Oracle sent back an unhandled error or account restriction log. Check GitHub Action outputs for raw data."}' \
+               -d '{"content": "🛑 **Action Required:** Oracle returned an unexpected error or account hold flag. Check your GitHub Actions execution log to inspect the raw text."}' \
                "${{ secrets.DISCORD_WEBHOOK }}"
+
+      # Note: There is NO Discord notification step for 'retry'. It loops completely silently when out of capacity.
 
       - name: ⏳ Handle Oracle Cooldown (15-Min Timeout)
         if: always() && steps.oci_script.outputs.RESULT == 'cooldown'
@@ -124,5 +117,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Process finished. Disabling workflow permanently to clean up execution loops..."
+          echo "Process finished. Disabling workflow permanently..."
           gh workflow disable oci_poller.yml
