@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  actions: write         # Allows the script to self-manage its state
+  actions: write         # Crucial: Allows the script to kill itself to stop spam
 
 jobs:
   run-capacity-script:
@@ -59,7 +59,7 @@ jobs:
           
           if echo "$OUTPUT" | grep -iq "Out of host capacity"; then
             echo "RESULT=retry" >> $GITHUB_OUTPUT
-          elif echo "$OUTPUT" | grep -iq "LimitExceeded" || echo "$OUTPUT" | grep -iq "quota"; then
+          elif echo "$OUTPUT" | grep -iq "LimitExceeded" || echo "$OUTPUT" | grep -iq "quota" || echo "$OUTPUT" | grep -iq "limit"; then
             echo "RESULT=already_exists" >> $GITHUB_OUTPUT
           elif echo "$OUTPUT" | grep -iq "TooManyRequests" || echo "$OUTPUT" | grep -iq "Too many requests" || echo "$OUTPUT" | grep -iq "429"; then
             echo "RESULT=cooldown" >> $GITHUB_OUTPUT
@@ -111,9 +111,9 @@ jobs:
           gh workflow enable oci_poller.yml
 
       - name: 🛑 Shut Down Sniper Permanently
-        if: always() && (steps.oci_script.outputs.RESULT == 'success' || steps.oci_script.outputs.RESULT == 'already_exists')
+        if: always() && (steps.oci_script.outputs.RESULT == 'success' || steps.oci_script.outputs.RESULT == 'already_exists' || steps.oci_script.outputs.RESULT == 'unknown_error')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Process finished. Disabling workflow permanently..."
+          echo "Process hit a hard stop condition (Success, Limit, or Unknown Error). Disabling workflow permanently to prevent Discord spam..."
           gh workflow disable oci_poller.yml
